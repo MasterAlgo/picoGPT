@@ -1,2 +1,255 @@
-# picoGPT
-Tiny generator
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pico-GPT</title>
+    <style>
+        #dropzone {
+            width: 300px;
+            height: 200px;
+            border: 2px dashed #cccccc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 20px;
+        }
+        #dropzone.hover {
+            border-color: #666666;
+        }
+        #charCount, #uniqueCharCount {
+            margin-top: 20px;
+        }
+        #generationArea{
+            width: 600px;
+            height: 200px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Pico GPT</h1>
+    
+    <label for="prompt">Prompt:</label>
+    <input type="text" id="prompt" value=""><br><br>
+    
+    <label for="generateForward">Generate Forward:</label>
+    <input type="checkbox" id="generateForward"><br><br>
+
+    <div id="dropzone">Drop text file here</div>
+    <textarea id="generationArea"></textarea>
+    <p id="charCount">Character Count: 0</p>
+    
+    <script>
+        const zeroChar = String.fromCharCode(0);  // Global 
+        let   nextChar = '';                      // Global
+        let   pStart, pEnd, hStart, hEnd;         // Global
+        let   matchingSynapsesPatterns = [];      // for patterns comparison it collect matching patterns with particular "synapse" number
+        const minTrainingSynapses = 3;            // consider patterns with no less then those skips             (online tuning possible)
+        const similarityThreshold = 0.5;          // consider patterns with no less then sim threashold matching (online tuning possible)
+        let   sensorSize          = 5;            // calculated as prompt length                                 (online tuning possible)
+        const charMap             = new Map();    // next-previous token probabilities collector
+        const masks               = [];           // decomposition tool
+        let   text                = ``;           // input container
+        let   prompt = ``;
+        const skipsNumber         = 3;            // masks generating parameter
+        const startTrainingAt = 100;              // experience interval definition (online tuning possible)
+        const stopTrainingAt  = 50000;            // experience interval definition (online tuning possible)
+
+        const dropzone             = document.getElementById("dropzone");
+        const charCount            = document.getElementById("charCount");
+        const skipsNumberInput     = document.getElementById("skipsNumber");
+        const promptInput          = document.getElementById("prompt");
+        const generateForwardInput = document.getElementById("generateForward");
+        const generationArea       = document.getElementById("generationArea");
+
+        dropzone.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            dropzone.classList.add("hover");
+        });
+
+        dropzone.addEventListener("dragleave", () => {
+            dropzone.classList.remove("hover");
+        });
+
+        dropzone.addEventListener("drop", (event) => {
+            event.preventDefault();
+            dropzone.classList.remove("hover");
+
+            const files = event.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    text = e.target.result;
+
+                    const characterCount = text.length;
+                    charCount.textContent = `Character Count: ${characterCount} Train Range: ${startTrainingAt} - ${stopTrainingAt}`;
+
+                    prompt = promptInput.value;
+                    sensorSize = prompt.length;
+                    matchingSynapsesPatterns = new Array(sensorSize); 
+
+                    generateMasks(sensorSize, skipsNumber);
+
+                    generationArea.value = prompt;
+                    
+                    findNextToken();                    // main logic here
+                };
+                reader.readAsText(file);
+            }
+        });
+                    // generate array with skip-permutations of size of sensor 
+                    // main input decomposition tool
+        function generateMasks(tokenLength, maxSkip) {
+            const totalMasks = (1 << tokenLength) - 1;
+
+            for (let mask = 1; mask <= totalMasks; mask++) {
+                const binaryMask = [];
+                let skips = 0;
+
+                for (let i = 0; i < tokenLength; i++) {
+                    const bit = (mask & (1 << i)) !== 0;
+                    binaryMask.push(bit);
+                    if (!bit) {
+                        skips++;
+                    }
+                }
+
+                if (skips <= maxSkip) {
+                    masks.push(binaryMask);
+                }
+            }
+        }
+                    // creator of input frame skip-permutations
+        function getPatterns(chars, masksArray) {
+            const columns = sensorSize;
+            const rows = masksArray.length;
+            const patternsArray = Array.from({ length: rows }, () => Array(columns).fill(zeroChar));
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < columns; c++) {
+                    if (!masksArray[r][c]) {
+                        patternsArray[r][c] = zeroChar;
+                    } else {
+                        patternsArray[r][c] = chars[c];
+                    }
+                }
+            }
+            return patternsArray;
+        }
+                        // optional trimming of leading and trailing "zeros"
+                        // just for more efficient patterns comparison
+                        // prefix h - means "history" - input frame comes from the Dataset
+        function hTrim(source) {
+            hStart = 0;
+            hEnd = source.length;
+            while (hStart < hEnd && source[hStart] === zeroChar) {
+                hStart++;
+            }
+            while (hStart < hEnd && source[hEnd - 1] === zeroChar) {
+                hEnd--;
+            }
+        }
+                        // optional trimming of leading and trailing "zeros"
+                        // just for more efficient patterns comparison
+                        // prefix p - means "prompt" - input frame is the prompt
+        function pTrim(source) {
+            pStart = 0;
+            pEnd = source.length;
+            while (pStart < pEnd && source[pStart] === zeroChar) {
+                pStart++;
+            }
+            while (pStart < pEnd && source[pEnd - 1] === zeroChar) {
+                pEnd--;
+            }
+        }
+                        // definition of a neuron behavior
+        function compareIntegrate(promptPatternsArray, historyPatternsArray) {
+            const rows = promptPatternsArray.length;
+            const columns = sensorSize;
+            for (let i = 0; i < matchingSynapsesPatterns.length; i++) {
+                matchingSynapsesPatterns[i] = 0;
+            }
+            let numberOfMatches = 0;
+            for (let row = 0; row < rows; row++) {
+                let flagMatching = true;
+                let synapsesNumber = 0;
+                pTrim(promptPatternsArray[row]);
+                hTrim(historyPatternsArray[row]);
+                if (pEnd - pStart !== hEnd - hStart) flagMatching = false;
+                else {
+                    for (let c = pStart; c < pEnd; c++) {
+                        if (promptPatternsArray[row][c] > zeroChar) {
+                            synapsesNumber++;
+                        }
+                        if (promptPatternsArray[row][c] !== historyPatternsArray[row][c]) {
+                            flagMatching = false;
+                            break;
+                        }
+                    }
+                }
+                if(flagMatching){
+                    matchingSynapsesPatterns [synapsesNumber - 1]++;
+                    numberOfMatches++;
+                }
+            }
+            let similarity = 0; 
+            if (numberOfMatches > 0) {                                          // input frame and prompt similarity distance (a variant)
+                let divider = 1;
+                for (let i = sensorSize - 1; i >= minTrainingSynapses - 1; i--) {
+                    const delta = 1.0 * matchingSynapsesPatterns[i] / divider;
+                    similarity += delta;
+                    divider *= columns;
+                }
+                if (similarity > similarityThreshold) {
+                    const newValue = (charMap.get(nextChar) || 0) + similarity;
+                    charMap.set(nextChar, newValue);
+                }
+            }
+            return similarity;
+        }
+        
+        function findNextToken(){
+            charMap.forEach((value, key) => {
+                charMap.set(key, 0);
+            });
+            const promptArray = getPatterns(prompt, masks); 
+            
+            const generateForward      = generateForwardInput.checked;
+                    // generating and discarding of pico ANN at each input frame - RAM saver (ANN serializer)
+            for (let i = startTrainingAt; i <= stopTrainingAt - sensorSize - 1; i++) {
+                const history      = text.substr(i, sensorSize);
+                const historyArray = getPatterns(history, masks); 
+
+                if (generateForward) { nextChar = text[i + sensorSize];} 
+                else {                 nextChar = text[i - 1];         }
+                const similarityValue = compareIntegrate(promptArray, historyArray); // optional similarity calculation
+            }
+
+            let highestChar = '';
+            let highestValue = 0;
+            charMap.forEach((value, key) => {            // winner token takes all, could be modified
+                if (value > highestValue) {
+                    highestValue = value;
+                    highestChar = key;
+                }
+            });
+
+                        // Read text from textarea and update based on generateForward value
+            let textAreaValue = generationArea.value;
+            if (generateForward) {
+                textAreaValue += highestChar;
+                prompt = prompt.substr(1) + highestChar;
+            } 
+            else {
+                textAreaValue = highestChar + textAreaValue;
+                prompt = highestChar + prompt.substr(0, prompt.length - 1);
+            }
+            generationArea.value = textAreaValue; // Update textarea with the new text
+            setTimeout(findNextToken, 0);      // give browser chance to update text area
+        }
+    </script>
+</body>
+</html>
+
