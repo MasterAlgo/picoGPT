@@ -1,5 +1,351 @@
-<html>
-  <body>
-    Hello world!
-  </body>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIF Neuron Visualization</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            border: 1px solid #ccc;
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 100%;
+            max-width: 800px;
+        }
+        .slider-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+        .slider-label {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>LIF Neuron Visualization</h1>
+    <div class="controls">
+        <label for="signalType">Signal Type:</label>
+        <select id="signalType">
+            <option value="sinus">Sinus</option>
+            <option value="spikes">Spikes</option>
+            <option value="random">Random</option>
+        </select>
+    </div>
+    <canvas id="neuronCanvas" width="800" height="600"></canvas>
+    <div class="controls">
+        <div class="slider-container">
+            <span class="slider-label" id="lowerThresholdLabel">Lower Input Threshold: 0.30</span>
+            <input type="range" id="lowerThresholdSlider" min="0" max="100" value="30">
+        </div>
+        <div class="slider-container">
+            <span class="slider-label" id="upperThresholdLabel">Upper Input Threshold: 0.70</span>
+            <input type="range" id="upperThresholdSlider" min="0" max="100" value="70">
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const numInputs = 5;
+        let time = 0;
+        let animating = true;
+        let signalType = "sinus";
+        let lowerThreshold = 0.3;
+        let upperThreshold = 0.7;
+        
+        // Initialize phases and current values
+        const phases = Array.from({length: numInputs}, () => Math.random() * 2 * Math.PI);
+        const currentValues = Array.from({length: numInputs}, () => 0.0);
+        
+        // Get canvas and context
+        const canvas = document.getElementById('neuronCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set up event listeners
+        document.getElementById('signalType').addEventListener('change', function(e) {
+            signalType = e.target.value;
+        });
+        
+        document.getElementById('lowerThresholdSlider').addEventListener('input', function(e) {
+            lowerThreshold = e.target.value / 100;
+            document.getElementById('lowerThresholdLabel').textContent = 
+                `Lower Input Threshold: ${lowerThreshold.toFixed(2)}`;
+        });
+        
+        document.getElementById('upperThresholdSlider').addEventListener('input', function(e) {
+            upperThreshold = e.target.value / 100;
+            document.getElementById('upperThresholdLabel').textContent = 
+                `Upper Input Threshold: ${upperThreshold.toFixed(2)}`;
+        });
+        
+        // Animation function
+        function animate() {
+            if (animating) {
+                time += 0.05;
+                draw();
+                requestAnimationFrame(animate);
+            }
+        }
+        
+        // Drawing function
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Enable anti-aliasing
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            
+            // Draw soma (cell body) on the right
+            const somaX = canvas.width - 150;
+            const somaY = canvas.height / 2;
+            const somaRadius = 50;
+            
+            ctx.fillStyle = 'rgb(255, 200, 200)';
+            ctx.beginPath();
+            ctx.arc(somaX, somaY, somaRadius, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(somaX, somaY, somaRadius, 0, 2 * Math.PI);
+            ctx.stroke();
+            
+            // Draw inputs on the left
+            const inputX = 300;
+            const spacing = canvas.height / (numInputs + 1);
+            const inputRadius = 20;
+            
+            // Draw 0-lines for future graphs of incoming signals
+            const zeroLineX = inputX - 50;
+            const zeroLineLength = 200;
+            
+            // Calculate sum of all input values
+            let sum = 0;
+            
+            for (let i = 0; i < numInputs; i++) {
+                const inputY = spacing * (i + 1);
+                
+                // Draw wave based on selected signal type
+                ctx.strokeStyle = 'blue';
+                ctx.lineWidth = 1.5;
+                
+                const waveAmplitude = 20;
+                const phase = phases[i];
+                
+                let prevX = zeroLineX - zeroLineLength;
+                let prevY = inputY;
+                let value = 0;
+                
+                for (let x = zeroLineX - zeroLineLength + 1; x <= zeroLineX; x++) {
+                    const normalizedX = (x - (zeroLineX - zeroLineLength)) / zeroLineLength;
+                    
+                    if (signalType === "sinus") {
+                        // Use (1 + sin)/2 to get values between 0 and 1
+                        value = (1 + Math.sin(normalizedX * 6 * Math.PI + time + phase)) / 2;
+                    } 
+                    else if (signalType === "spikes") {
+                        // Generate triple spike train pattern with much slower movement
+                        const spikeFreq = 0.3 + (i * 0.05);
+                        const spikePhase = ((normalizedX * spikeFreq + time/12 + phase/9) % 1.0);
+                        
+                        // Generate triple spikes at regular intervals
+                        // First spike
+                        if (spikePhase < 0.03) {
+                            value = 1.0;
+                        } else if (spikePhase < 0.06) {
+                            value = 1.0 - ((spikePhase - 0.03) * 20);
+                        } 
+                        // Second spike
+                        else if (spikePhase < 0.09) {
+                            value = 0.9;
+                        } else if (spikePhase < 0.12) {
+                            value = 0.9 - ((spikePhase - 0.09) * 20);
+                        } 
+                        // Third spike
+                        else if (spikePhase < 0.15) {
+                            value = 0.8;
+                        } else if (spikePhase < 0.18) {
+                            value = 0.8 - ((spikePhase - 0.15) * 20);
+                        } 
+                        // Baseline
+                        else {
+                            value = 0.0;
+                        }
+                    }
+                    else if (signalType === "random") {
+                        // Use different random-like functions for each input
+                        switch (i % 5) {
+                            case 0:
+                                // Perlin-like noise using sine combinations
+                                value = 0.5 + 0.5 * Math.sin(normalizedX * 7 + time * 2) * 
+                                       Math.sin(normalizedX * 13 + time + phase);
+                                break;
+                            case 1:
+                                // Square-wave like pattern
+                                value = (Math.sin(normalizedX * 5 + time * 1.5 + phase) > 0) ? 
+                                       0.8 * Math.random() : 0.2 * Math.random();
+                                break;
+                            case 2:
+                                // Sawtooth-like pattern
+                                value = ((normalizedX * 3 + time + phase) % 1.0) * 
+                                       (0.7 + 0.3 * Math.sin(time * 2));
+                                break;
+                            case 3:
+                                // Chaotic pattern using tangent
+                                value = 0.5 + 0.3 * Math.tan(Math.sin(normalizedX * 8 + time + phase * 2)) / 
+                                       (1 + Math.abs(Math.tan(Math.sin(normalizedX * 8 + time + phase * 2))));
+                                break;
+                            case 4:
+                                // Pulse pattern with varying widths
+                                const pulseWidth = 0.1 + 0.1 * Math.sin(time * 0.5);
+                                const pulsePos = (normalizedX * 4 + time * 0.7 + phase) % 1.0;
+                                value = (pulsePos < pulseWidth) ? 0.9 : 0.1 * Math.random();
+                                break;
+                        }
+                        
+                        // Ensure value stays between 0 and 1
+                        value = Math.max(0, Math.min(1, value));
+                    }
+                    
+                    // Draw from zero line upward
+                    const y = inputY - (value * waveAmplitude * 2);
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(prevX, prevY);
+                    ctx.lineTo(x, y);
+                    ctx.stroke();
+                    
+                    prevX = x;
+                    prevY = y;
+                    
+                    // Store the current value at the end of the wave
+                    if (x === zeroLineX) {
+                        currentValues[i] = value;
+                        // Only add to sum if value is between thresholds
+                        if (value >= lowerThreshold && value <= upperThreshold) {
+                            sum += value;
+                        }
+                    }
+                }
+                
+                // Draw 0-line for signal graph
+                ctx.strokeStyle = 'gray';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.moveTo(zeroLineX - zeroLineLength, inputY);
+                ctx.lineTo(zeroLineX, inputY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                // Draw input circle with color based on threshold
+                if (currentValues[i] >= lowerThreshold && currentValues[i] <= upperThreshold) {
+                    // Highlight active inputs with a brighter color
+                    ctx.fillStyle = 'rgb(100, 200, 255)';
+                } else {
+                    // Use default color for inactive inputs
+                    ctx.fillStyle = 'rgb(200, 200, 255)';
+                }
+                
+                ctx.beginPath();
+                ctx.arc(inputX, inputY, inputRadius, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(inputX, inputY, inputRadius, 0, 2 * Math.PI);
+                ctx.stroke();
+                
+                // Display current value inside the input oval
+                ctx.fillStyle = 'black';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const valueText = currentValues[i].toFixed(2);
+                ctx.fillText(valueText, inputX, inputY);
+                
+                // Draw dendrite connecting input to soma
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(inputX + inputRadius, inputY);
+                ctx.lineTo(somaX - somaRadius, somaY);
+                ctx.stroke();
+            }
+            
+            // Draw soma activation level
+            const activationLevel = Math.min(1, sum / numInputs);
+            const activationColor = `rgb(${255}, ${Math.floor(200 - activationLevel * 200)}, ${Math.floor(200 - activationLevel * 200)})`;
+            ctx.fillStyle = activationColor;
+            ctx.beginPath();
+            ctx.arc(somaX, somaY, somaRadius * 0.8, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Display activation level inside soma
+            ctx.fillStyle = 'black';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`${(activationLevel * 100).toFixed(0)}%`, somaX, somaY);
+            
+            // Display contributing input names under the soma if sum > 0
+            if (sum > 0) {
+                let contributingInputs = "Active: ";
+                for (let i = 0; i < numInputs; i++) {
+                    const value = currentValues[i];
+                    if (value >= lowerThreshold && value <= upperThreshold) {
+                        contributingInputs += String.fromCharCode('A'.charCodeAt(0) + i) + " ";
+                    }
+                }
+                
+                ctx.font = '14px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(contributingInputs, somaX, somaY + somaRadius + 20);
+            }
+            
+            // Draw axon extending from the soma
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(somaX + somaRadius, somaY);
+            ctx.lineTo(somaX + somaRadius + 100, somaY);
+            ctx.stroke();
+            
+            // Add labels
+            ctx.font = 'bold 14px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText("Inputs", inputX - 30, 30);
+            ctx.fillText("Signal Lines", zeroLineX - 80, 30);
+            ctx.fillText("Soma", somaX - 20, somaY - somaRadius - 10);
+            ctx.fillText("Axon", somaX + somaRadius + 40, somaY - 10);
+            
+            // Display sum of inputs above the top connection line
+            const sumX = (inputX + inputRadius + somaX - somaRadius) / 2;
+            const sumY = spacing * 1.5;
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`Sum: ${sum.toFixed(2)}`, sumX, sumY);
+        }
+        
+        // Start animation
+        animate();
+    </script>
+</body>
 </html>
